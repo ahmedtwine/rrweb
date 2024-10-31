@@ -55,34 +55,15 @@ export default function Player() {
               li:not(:empty):not(:has(*)),
               td:not(:empty):not(:has(*)),
               th:not(:empty):not(:has(*)) {
-                position: relative;
-              }
-              `,
-              // Apply overlay mask using ::before pseudo-element
-              `
-              p:not(:empty):not(:has(*))::before,
-              span:not(:empty):not(:has(*))::before,
-              h1:not(:empty):not(:has(*))::before,
-              h2:not(:empty):not(:has(*))::before,
-              h3:not(:empty):not(:has(*))::before,
-              h4:not(:empty):not(:has(*))::before,
-              h5:not(:empty):not(:has(*))::before,
-              h6:not(:empty):not(:has(*))::before,
-              label:not(:empty):not(:has(*))::before,
-              a:not(:empty):not(:has(*))::before,
-              li:not(:empty):not(:has(*))::before,
-              td:not(:empty):not(:has(*))::before,
-              th:not(:empty):not(:has(*))::before {
-                content: '';
-                position: absolute;
-                top: 0; left: 0; right: 0; bottom: 0;
+                /* Apply masking styles */
                 background-color: rgba(108, 99, 255, 0.95);
+                color: transparent;
                 border-radius: 6px;
                 box-shadow: 0 2px 8px rgba(108, 99, 255, 0.2);
-                backdrop-filter: blur(8px);
-                -webkit-backdrop-filter: blur(8px);
-                z-index: 1;
-                pointer-events: none;
+                text-shadow: none;
+                backdrop-filter: blur(4px);
+                -webkit-backdrop-filter: blur(4px);
+                overflow: hidden;
               }
               `,
               // Keep replayer elements transparent
