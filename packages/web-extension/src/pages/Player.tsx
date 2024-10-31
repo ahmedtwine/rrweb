@@ -40,60 +40,53 @@ export default function Player() {
             events,
             autoPlay: true,
             insertStyleRules: [
-              // Custom text masking style
+              // Target specific text-containing elements without children
               `
-              p:not(:empty), span:not(:empty), div:not(.replayer-wrapper):not(.replayer-mouse):not(:empty):not(:has(*)) {
-                background-color: rgba(108, 99, 255, 0.85);
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(108, 99, 255, 0.15),
-                           inset 0 0 20px rgba(255, 255, 255, 0.1);
-                backdrop-filter: blur(12px) saturate(180%);
-                -webkit-backdrop-filter: blur(12px) saturate(180%);
-                padding: 6px 12px;
-                margin: 3px 0;
+              p:not(:empty):not(:has(*)),
+              span:not(:empty):not(:has(*)),
+              h1:not(:empty):not(:has(*)),
+              h2:not(:empty):not(:has(*)),
+              h3:not(:empty):not(:has(*)),
+              h4:not(:empty):not(:has(*)),
+              h5:not(:empty):not(:has(*)),
+              h6:not(:empty):not(:has(*)),
+              label:not(:empty):not(:has(*)),
+              a:not(:empty):not(:has(*)),
+              li:not(:empty):not(:has(*)),
+              td:not(:empty):not(:has(*)),
+              th:not(:empty):not(:has(*)) {
                 position: relative;
-                z-index: 1;
-                color: transparent;
-                text-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                transform: translateZ(0);
-                overflow: hidden;
               }
               `,
-              // Enhanced heading and container masking
+              // Apply overlay mask using ::before pseudo-element
               `
-              h1:not(:empty), h2:not(:empty), h3:not(:empty), h4:not(:empty), h5:not(:empty), h6:not(:empty),
-              article:not(:empty), section:not(:empty) > *:not(:has(*)), label:not(:empty), li:not(:empty) {
-                background-color: rgba(108, 99, 255, 0.9);
-                border-radius: 12px;
-                box-shadow: 0 8px 32px rgba(108, 99, 255, 0.2),
-                           inset 0 0 32px rgba(255, 255, 255, 0.05);
-                backdrop-filter: blur(16px) saturate(180%);
-                -webkit-backdrop-filter: blur(16px) saturate(180%);
-                padding: 8px 16px;
-                margin: 6px 0;
-                position: relative;
+              p:not(:empty):not(:has(*))::before,
+              span:not(:empty):not(:has(*))::before,
+              h1:not(:empty):not(:has(*))::before,
+              h2:not(:empty):not(:has(*))::before,
+              h3:not(:empty):not(:has(*))::before,
+              h4:not(:empty):not(:has(*))::before,
+              h5:not(:empty):not(:has(*))::before,
+              h6:not(:empty):not(:has(*))::before,
+              label:not(:empty):not(:has(*))::before,
+              a:not(:empty):not(:has(*))::before,
+              li:not(:empty):not(:has(*))::before,
+              td:not(:empty):not(:has(*))::before,
+              th:not(:empty):not(:has(*))::before {
+                content: '';
+                position: absolute;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background-color: rgba(108, 99, 255, 0.95);
+                border-radius: 6px;
+                box-shadow: 0 2px 8px rgba(108, 99, 255, 0.2);
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
                 z-index: 1;
-                color: transparent;
-                text-shadow: 0 0 12px rgba(0, 0, 0, 0.9);
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                transform: translateZ(0);
-                overflow: hidden;
+                pointer-events: none;
               }
               `,
               // Keep replayer elements transparent
               '.replayer-mouse, .replayer-mouse-tail { background-color: transparent !important; }',
-              // Sophisticated hover effect
-              `
-              p:not(:empty):hover, span:not(:empty):hover, div:not(.replayer-wrapper):not(.replayer-mouse):not(:empty):not(:has(*)):hover,
-              h1:not(:empty):hover, h2:not(:empty):hover, h3:not(:empty):hover, h4:not(:empty):hover, h5:not(:empty):hover, h6:not(:empty):hover {
-                background-color: rgba(108, 99, 255, 0.95);
-                box-shadow: 0 12px 32px rgba(108, 99, 255, 0.25),
-                           inset 0 0 40px rgba(255, 255, 255, 0.08);
-                transform: translateY(-1px) translateZ(0);
-                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-              }
-              `
             ]
           },
         });
