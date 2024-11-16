@@ -9,6 +9,7 @@ import {
   Center,
 } from '@chakra-ui/react';
 import { getEvents, getSession } from '~/utils/storage';
+import 'rrweb-player/dist/style.css';
 
 export default function Player() {
   const playerElRef = useRef<HTMLDivElement>(null);
@@ -29,11 +30,6 @@ export default function Player() {
       .then((events) => {
         if (!playerElRef.current) return;
 
-        const linkEl = document.createElement('link');
-        linkEl.href =
-          'https://cdn.jsdelivr.net/npm/rrweb-player@latest/dist/style.css';
-        linkEl.rel = 'stylesheet';
-        document.head.appendChild(linkEl);
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
           props: {
