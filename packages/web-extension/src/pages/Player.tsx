@@ -30,6 +30,8 @@ export default function Player() {
       .then((events) => {
         if (!playerElRef.current) return;
 
+        playerRef.current?.$destroy();
+
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
           props: {
