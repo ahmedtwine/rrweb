@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Replayer from 'rrweb-player';
+import { EventType, IncrementalSource, MouseInteractions } from '@rrweb/types';
 import {
   Box,
   Breadcrumb,
@@ -10,6 +11,37 @@ import {
 } from '@chakra-ui/react';
 import { getEvents, getSession } from '~/utils/storage';
 import 'rrweb-player/dist/style.css';
+import type { eventWithTime } from '@rrweb/types';
+import type { ReplayPlugin } from 'rrweb';
+
+const createClickHighlightPlugin = (): ReplayPlugin => {
+  return {
+    handler(
+      event: eventWithTime,
+      isSync: boolean,
+      context
+    ) {
+      if (
+        event.type === EventType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.MouseInteraction &&
+        event.data.type === MouseInteractions.Click
+      ) {
+        const target = context.replayer.getMirror().getNode(event.data.id) as HTMLElement | null;
+        console.log(target);
+        if (!target) return;
+        
+        target.style.border = '6px solid red';
+        target.style.boxShadow = '0 0 10px 0 rgba(255, 0, 0, 0.5)';
+        target.style.transform = 'scale(1.05)';
+        target.style.transition = 'all 0.3s ease';
+        
+        setTimeout(() => {
+          (target ).style.border = '';
+        }, 500);
+      }
+    },
+  };
+};
 
 export default function Player() {
   const playerElRef = useRef<HTMLDivElement>(null);
@@ -39,6 +71,7 @@ export default function Player() {
             autoPlay: true,
             UNSAFE_replayCanvas: true,
             useVirtualDom: true,
+            plugins: [createClickHighlightPlugin()],
           },
         });
       })
