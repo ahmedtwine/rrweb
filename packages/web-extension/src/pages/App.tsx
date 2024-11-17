@@ -31,8 +31,8 @@ export default function App() {
     >
       <Routes>
         <Route path="/" element={<SessionList />} />
-        {/* <Route path="session/:sessionId" element={<InteractivePlayer />} /> */}
-        <Route path="session/:sessionId" element={<Player />} />
+        <Route path="session/:sessionId" element={<InteractivePlayer />} />
+        {/* <Route path="session/:sessionId" element={<Player />} /> */}
       </Routes>
     </SidebarWithHeader>
   );
