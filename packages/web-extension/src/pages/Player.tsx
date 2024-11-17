@@ -72,7 +72,14 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           backgroundColor: 'rgba(125, 125, 255, 0.05)',
           backdropFilter: 'blur(6px)',
           borderRadius: '16px',
-          pointerEvents: 'none',
+          // **Changed pointerEvents to 'auto' and added cursor style**
+          pointerEvents: 'auto',
+          cursor: 'pointer',
+        });
+
+        // **Added event listener to remove overlay on click**
+        overlay.addEventListener('click', () => {
+          overlay.remove();
         });
 
         if (getComputedStyle(parentElement).position === 'static') {
@@ -135,7 +142,9 @@ export default function Player() {
             autoPlay: true,
             UNSAFE_replayCanvas: true,
             useVirtualDom: true,
-            plugins: [createClickHighlightPlugin(), createMutationHighlightPlugin()],
+            plugins: [
+              // createClickHighlightPlugin(), 
+              createMutationHighlightPlugin()],
           },
         });
 
