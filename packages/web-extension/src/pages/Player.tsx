@@ -72,14 +72,24 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           backgroundColor: 'rgba(125, 125, 255, 0.05)',
           backdropFilter: 'blur(6px)',
           borderRadius: '16px',
-          // **Changed pointerEvents to 'auto' and added cursor style**
           pointerEvents: 'auto',
           cursor: 'pointer',
+          // **Added transition for animation**
+          transition: 'opacity 0.3s ease, backdrop-filter 0.3s ease',
         });
 
-        // **Added event listener to remove overlay on click**
+        // **Updated event listener to add animation on click**
         overlay.addEventListener('click', () => {
-          overlay.remove();
+          overlay.style.opacity = '0';
+          overlay.style.backdropFilter = 'blur(0px)';
+          // Remove the overlay after the transition ends
+          overlay.addEventListener(
+            'transitionend',
+            () => {
+              overlay.remove();
+            },
+            { once: true }
+          );
         });
 
         if (getComputedStyle(parentElement).position === 'static') {
