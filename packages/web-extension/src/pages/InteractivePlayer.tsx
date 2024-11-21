@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Replayer from 'rrweb-player';
+import { Client } from "@gradio/client";
 import { EventType, IncrementalSource, MouseInteractions } from '@rrweb/types';
 import {
   Box,
@@ -8,10 +9,41 @@ import {
   BreadcrumbItem,
   BreadcrumbLink,
   Center,
+  VStack,
+  Text,
+  Code,
+  useToast,
 } from '@chakra-ui/react';
 import { getEvents, getSession } from '~/utils/storage';
 import 'rrweb-player/dist/style.css';
-import type { ReplayPlugin } from 'rrweb';
+import type { ReplayPlugin, eventWithTime } from 'rrweb';
+import html2canvas from 'html2canvas';
+import type { Mirror } from 'rrweb-snapshot';
+
+type BoundingBox = [number, number, number, number]; // [x, y, width, height]
+
+
+interface ReplayerContext {
+  replayer: Replayer;
+  event: eventWithTime;
+  mirror: Mirror;
+}
+
+interface GradioResponse {
+  data: [
+    { // image output
+      path: string;
+      url: string;
+      size: null;
+      orig_name: string;
+      mime_type: null;
+      is_stream: boolean;
+      meta: { _type: string };
+    },
+    string, // parsed text
+    Record<string, BoundingBox> // coordinates
+  ];
+}
 
 const createClickHighlightPlugin = (): ReplayPlugin => {
   return {
@@ -175,11 +207,66 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
   };
 };
 
+const createScreenshotAnalysisPlugin = (
+  onParseResults: (results: string[]) => void
+): ReplayPlugin => {
+  let analysisComplete = false;
+
+  const analyzeScreenshot = async (context: ReplayerContext) => {
+    if (analysisComplete) return;
+
+    try {
+      context.replayer.pause();
+      const iframe = context.replayer.iframe;
+      if (!iframe?.contentDocument) return;
+
+      const canvas = await html2canvas(iframe.contentDocument.body, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+
+      // Convert canvas to blob
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob!), 'image/webp', 0.95);
+      });
+
+      // Process image with OmniParser
+      const client = await Client.connect("microsoft/OmniParser");
+      const result = await client.predict("/process", {
+        image_input: blob,
+        box_threshold: 0.05,
+        iou_threshold: 0.1
+      }) as GradioResponse;
+
+      const textElements = result.data[1]
+        .split('\n')
+        .filter(line => line.trim().length > 0);
+
+      onParseResults(textElements);
+      analysisComplete = true;
+
+    } catch (error) {
+      console.error('Screenshot analysis error:', error);
+    }
+  };
+
+  return {
+    handler(event: eventWithTime, isSync: boolean, context: ReplayerContext) {
+      if (event.type === EventType.FullSnapshot) {
+        void analyzeScreenshot(context);
+      }
+    },
+  };
+};
+
 export default function InteractivePlayer() {
   const playerElRef = useRef<HTMLDivElement>(null);
-  const playerRef = useRef<any>(null); // Use 'any' to simplify type issues with rrweb-player
+  const playerRef = useRef<any>(null);
   const { sessionId } = useParams();
   const [sessionName, setSessionName] = useState('');
+  const [parseResults, setParseResults] = useState<string[]>([]);
+  const toast = useToast();
 
   useEffect(() => {
     if (!sessionId) return;
@@ -207,6 +294,7 @@ export default function InteractivePlayer() {
             useVirtualDom: true,
             plugins: [
               // createClickHighlightPlugin(),
+              // createScreenshotAnalysisPlugin(setParseResults),
               createMutationHighlightPlugin(),
             ],
           },
@@ -285,7 +373,7 @@ export default function InteractivePlayer() {
   }, [sessionId]);
 
   return (
-    <>
+    <VStack spacing={5} align="stretch">
       <Breadcrumb mb={5} fontSize="md">
         <BreadcrumbItem>
           <BreadcrumbLink href="#">Sessions</BreadcrumbLink>
@@ -294,9 +382,21 @@ export default function InteractivePlayer() {
           <BreadcrumbLink>{sessionName}</BreadcrumbLink>
         </BreadcrumbItem>
       </Breadcrumb>
+
       <Center>
         <Box ref={playerElRef}></Box>
       </Center>
-    </>
+
+      {parseResults.length > 0 && (
+        <Box p={4} borderRadius="md" bg="gray.50">
+          <Text fontSize="lg" fontWeight="bold" mb={3}>
+            Parsed Elements:
+          </Text>
+          <Code display="block" whiteSpace="pre" p={4}>
+            {parseResults.join('\n')}
+          </Code>
+        </Box>
+      )}
+    </VStack>
   );
 }
