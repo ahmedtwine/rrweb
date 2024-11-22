@@ -1,17 +1,49 @@
-import { useRef, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import Replayer from 'rrweb-player';
-import { EventType, IncrementalSource, MouseInteractions } from '@rrweb/types';
 import {
   Box,
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
   Center,
+  Code,
+  Text,
+  VStack,
+  useToast,
 } from '@chakra-ui/react';
+import { Client } from '@gradio/client';
+import { EventType, IncrementalSource, MouseInteractions } from '@rrweb/types';
+import { useEffect, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import Replayer from 'rrweb-player';
 import { getEvents, getSession } from '~/utils/storage';
 import 'rrweb-player/dist/style.css';
-import type { ReplayPlugin } from 'rrweb';
+import html2canvas from 'html2canvas';
+import type { ReplayPlugin, eventWithTime } from 'rrweb';
+import type { Mirror } from 'rrweb-snapshot';
+
+type BoundingBox = [number, number, number, number]; // [x, y, width, height]
+
+interface ReplayerContext {
+  replayer: Replayer;
+  event: eventWithTime;
+  mirror: Mirror;
+}
+
+interface GradioResponse {
+  data: [
+    {
+      // image output
+      path: string;
+      url: string;
+      size: null;
+      orig_name: string;
+      mime_type: null;
+      is_stream: boolean;
+      meta: { _type: string };
+    },
+    string, // parsed text
+    Record<string, BoundingBox>, // coordinates
+  ];
+}
 
 const createClickHighlightPlugin = (): ReplayPlugin => {
   return {
@@ -21,12 +53,14 @@ const createClickHighlightPlugin = (): ReplayPlugin => {
         event.data.source === IncrementalSource.MouseInteraction &&
         event.data.type === MouseInteractions.Click
       ) {
-        const target = context.replayer.getMirror().getNode(event.data.id) as HTMLElement | null;
+        const target = context.replayer
+          .getMirror()
+          .getNode(event.data.id) as HTMLElement | null;
         if (!target) return;
 
         // Remove any existing masking overlay
         const overlay = target.querySelector('div');
-        if (overlay && overlay.style.backdropFilter) {
+        if (overlay?.style.backdropFilter) {
           target.removeChild(overlay);
         }
 
@@ -55,7 +89,7 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
       iframeDocument,
       null,
       XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE,
-      null
+      null,
     );
 
     for (let i = 0; i < textElements.snapshotLength; i++) {
@@ -73,13 +107,10 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           borderRadius: '16px',
           pointerEvents: 'auto',
           cursor: 'pointer',
-          // Added transition for animation
           transition: 'opacity 0.3s ease, backdrop-filter 0.3s ease',
         });
 
-        // Updated event listener to display password prompt within the iframe
         overlay.addEventListener('click', () => {
-          // Create a simple password prompt within the iframe
           const passwordPrompt = iframeDocument.createElement('div');
           Object.assign(passwordPrompt.style, {
             position: 'fixed',
@@ -124,10 +155,8 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           iframeDocument.body.appendChild(passwordPrompt);
 
           submitButton.addEventListener('click', () => {
-            // For demo purposes, accept any input
             iframeDocument.body.removeChild(passwordPrompt);
 
-            // Proceed to remove the overlay as before
             overlay.style.opacity = '0';
             overlay.style.backdropFilter = 'blur(0px)';
             overlay.addEventListener(
@@ -135,12 +164,11 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
               () => {
                 overlay.remove();
               },
-              { once: true }
+              { once: true },
             );
           });
 
           cancelButton.addEventListener('click', () => {
-            // Remove the password prompt
             iframeDocument.body.removeChild(passwordPrompt);
           });
         });
@@ -175,11 +203,227 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
   };
 };
 
+const createScreenshotAnalysisPlugin = (
+  onParseResults: (results: string[]) => void,
+): ReplayPlugin => {
+  let analysisComplete = false;
+
+  interface Coordinates {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  interface ParsedBox {
+    id: string;
+    coords: Coordinates;
+    text: string;
+  }
+
+  let aiBoundingBoxes: ParsedBox[] = [];
+
+  const analyzeScreenshot = async (context: ReplayerContext) => {
+    if (analysisComplete) return;
+
+    const iframe = context.replayer.iframe;
+    if (!iframe || !iframe.contentDocument) {
+      console.error('No iframe found');
+      return;
+    }
+
+    try {
+      context.replayer.pause();
+
+      const canvas = await html2canvas(iframe.contentDocument.body, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+
+      const canvasWidth = canvas.width / 2;
+      const canvasHeight = canvas.height / 2;
+
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob!), 'image/webp', 0.95);
+      });
+
+      const client = await Client.connect('microsoft/OmniParser');
+      const result = (await client.predict('/process', {
+        image_input: blob,
+        box_threshold: 0.05,
+        iou_threshold: 0.1,
+      })) as GradioResponse;
+
+      onParseResults(
+        result.data[1].split('\n').filter((line) => line.trim().length > 0),
+      );
+
+      // Process the coordinates and store in aiBoundingBoxes
+      const coordinates = result.data[2];
+
+      let coordinateObject: Record<string, number[]>;
+
+      if (typeof coordinates === 'string') {
+        try {
+          coordinateObject = JSON.parse(coordinates.replace(/'/g, '"'));
+        } catch (e) {
+          console.error('Error parsing coordinates JSON:', e);
+          return;
+        }
+      } else {
+        coordinateObject = coordinates;
+      }
+
+      console.log('Raw coordinates received:', coordinates);
+      console.log('Parsed coordinates object:', coordinateObject);
+      console.log('Canvas dimensions:', {
+        width: canvasWidth,
+        height: canvasHeight,
+      });
+
+      // Convert coordinates to actual pixel values and create boxes
+      aiBoundingBoxes = Object.entries(coordinateObject)
+        .map(([id, coords]): ParsedBox => {
+          if (!coords || !Array.isArray(coords) || coords.length !== 4) {
+            console.warn(`Invalid coordinates for ID ${id}:`, coords);
+            return {
+              id,
+              coords: { x: 0, y: 0, width: 0, height: 0 },
+              text: '',
+            };
+          }
+
+          const coordArray = coords.map(Number);
+          if (coordArray.some(Number.isNaN)) {
+            console.warn(`Invalid coordinate values for ID ${id}:`, coords);
+            return {
+              id,
+              coords: { x: 0, y: 0, width: 0, height: 0 },
+              text: '',
+            };
+          }
+
+          const [x, y, width, height] = coordArray;
+          const pixelCoords = {
+            x: x * canvasWidth,
+            y: y * canvasHeight,
+            width: width * canvasWidth,
+            height: height * canvasHeight,
+          };
+          console.log(`Box ${id} converted coordinates:`, pixelCoords);
+
+          const text =
+            result.data[1]
+              .split('\n')
+              .find((line) => line.startsWith(`Text Box ID ${id}:`))
+              ?.replace(/^Text Box ID \d+: /, '')
+              ?.trim() || '';
+
+          return { id, coords: pixelCoords, text };
+        })
+        .filter((box) => box.text !== ''); // Filter out boxes with no text
+
+      analysisComplete = true;
+    } catch (error) {
+      console.error('Screenshot analysis error:', error);
+    }
+  };
+
+  const applyBoundingBoxStyles = (iframeDocument: Document) => {
+    if (aiBoundingBoxes.length === 0) return;
+
+    // Add highlight styles if not already added
+    if (!iframeDocument.querySelector('#omni-highlight-styles')) {
+      const style = iframeDocument.createElement('style');
+      style.id = 'omni-highlight-styles';
+      style.textContent = `
+        .omni-highlight {
+          position: relative !important;
+          outline: 2px solid #4A90E2 !important;
+          transition: all 0.3s ease !important;
+          z-index: 1000 !important;
+        }
+        .omni-highlight::after {
+          content: attr(data-omni-text);
+          position: absolute;
+          top: -20px;
+          left: 0;
+          background: rgba(0, 0, 0, 0.8);
+          color: white;
+          padding: 2px 6px;
+          border-radius: 3px;
+          font-size: 12px;
+          white-space: nowrap;
+          z-index: 1001;
+        }
+      `;
+      iframeDocument.head.appendChild(style);
+    }
+
+    // For each bounding box
+    aiBoundingBoxes.forEach((box) => {
+      const elements = Array.from(iframeDocument.querySelectorAll('*'));
+
+      elements.forEach((el) => {
+        const rect = el.getBoundingClientRect();
+
+        if (
+          rect.width === 0 ||
+          rect.height === 0 ||
+          rect.width < 5 ||
+          rect.height < 5
+        )
+          return;
+
+        if (intersects(rect, box.coords)) {
+          (el as HTMLElement).classList.add('omni-highlight');
+          el.setAttribute('data-omni-text', box.text);
+        }
+      });
+    });
+  };
+
+  const intersects = (rect1: DOMRect, rect2: Coordinates) => {
+    return !(
+      rect1.right < rect2.x ||
+      rect1.left > rect2.x + rect2.width ||
+      rect1.bottom < rect2.y ||
+      rect1.top > rect2.y + rect2.height
+    );
+  };
+
+  return {
+    handler(event: eventWithTime, isSync: boolean, context: ReplayerContext) {
+      const iframeDocument = context.replayer.iframe.contentDocument;
+      if (!iframeDocument) return;
+
+      if (
+        event.type === EventType.FullSnapshot ||
+        (event.type === EventType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation)
+      ) {
+        if (event.type === EventType.FullSnapshot) {
+          setTimeout(() => applyBoundingBoxStyles(iframeDocument), 100);
+        } else {
+          applyBoundingBoxStyles(iframeDocument);
+        }
+      }
+
+      if (event.type === EventType.FullSnapshot && !analysisComplete) {
+        void analyzeScreenshot(context);
+      }
+    },
+  };
+};
+
 export default function InteractivePlayer() {
   const playerElRef = useRef<HTMLDivElement>(null);
-  const playerRef = useRef<any>(null); // Use 'any' to simplify type issues with rrweb-player
+  const playerRef = useRef<any>(null);
   const { sessionId } = useParams();
   const [sessionName, setSessionName] = useState('');
+  const [parseResults, setParseResults] = useState<string[]>([]);
+  const toast = useToast();
 
   useEffect(() => {
     if (!sessionId) return;
@@ -207,7 +451,8 @@ export default function InteractivePlayer() {
             useVirtualDom: true,
             plugins: [
               // createClickHighlightPlugin(),
-              createMutationHighlightPlugin(),
+              // createMutationHighlightPlugin(),
+              createScreenshotAnalysisPlugin(setParseResults),
             ],
           },
         });
@@ -227,10 +472,11 @@ export default function InteractivePlayer() {
           if (iframe) {
             iframe.style.pointerEvents = 'auto';
             iframe.style.userSelect = 'auto';
-            iframe.removeAttribute('sandbox'); // Remove sandbox to avoid the warning
+            iframe.removeAttribute('sandbox');
 
             try {
-              const doc = iframe.contentDocument || iframe.contentWindow?.document;
+              const doc =
+                iframe.contentDocument || iframe.contentWindow?.document;
               if (doc) {
                 const style = doc.createElement('style');
                 style.textContent = `
@@ -256,15 +502,18 @@ export default function InteractivePlayer() {
           if (iframe) {
             iframe.style.pointerEvents = '';
             iframe.style.userSelect = '';
-            // Restore the sandbox attribute
             iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
 
             try {
-              const doc = iframe.contentDocument || iframe.contentWindow?.document;
+              const doc =
+                iframe.contentDocument || iframe.contentWindow?.document;
               if (doc) {
                 const styles = doc.querySelectorAll('style');
                 styles.forEach((style) => {
-                  if (style.textContent && style.textContent.includes('pointer-events: auto')) {
+                  if (
+                    style.textContent &&
+                    style.textContent.includes('pointer-events: auto')
+                  ) {
                     style.remove();
                   }
                 });
@@ -285,7 +534,7 @@ export default function InteractivePlayer() {
   }, [sessionId]);
 
   return (
-    <>
+    <VStack spacing={5} align="stretch">
       <Breadcrumb mb={5} fontSize="md">
         <BreadcrumbItem>
           <BreadcrumbLink href="#">Sessions</BreadcrumbLink>
@@ -294,9 +543,21 @@ export default function InteractivePlayer() {
           <BreadcrumbLink>{sessionName}</BreadcrumbLink>
         </BreadcrumbItem>
       </Breadcrumb>
+
       <Center>
         <Box ref={playerElRef}></Box>
       </Center>
-    </>
+
+      {parseResults.length > 0 && (
+        <Box p={4} borderRadius="md" bg="gray.50">
+          <Text fontSize="lg" fontWeight="bold" mb={3}>
+            Parsed Elements:
+          </Text>
+          <Code display="block" whiteSpace="pre" p={4}>
+            {parseResults.join('\n')}
+          </Code>
+        </Box>
+      )}
+    </VStack>
   );
 }
