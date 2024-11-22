@@ -341,7 +341,6 @@ const createScreenshotAnalysisPlugin = (
         .omni-highlight {
           position: relative !important;
           outline: 2px solid #4A90E2 !important;
-          background-color: rgba(255, 255, 0, 0.3) !important;
           transition: all 0.3s ease !important;
           z-index: 1000 !important;
         }
