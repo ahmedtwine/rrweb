@@ -60,7 +60,7 @@ const createClickHighlightPlugin = (): ReplayPlugin => {
 
         // Remove any existing masking overlay
         const overlay = target.querySelector('div');
-        if (overlay && overlay.style.backdropFilter) {
+        if (overlay?.style.backdropFilter) {
           target.removeChild(overlay);
         }
 
@@ -107,13 +107,10 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           borderRadius: '16px',
           pointerEvents: 'auto',
           cursor: 'pointer',
-          // Added transition for animation
           transition: 'opacity 0.3s ease, backdrop-filter 0.3s ease',
         });
 
-        // Updated event listener to display password prompt within the iframe
         overlay.addEventListener('click', () => {
-          // Create a simple password prompt within the iframe
           const passwordPrompt = iframeDocument.createElement('div');
           Object.assign(passwordPrompt.style, {
             position: 'fixed',
@@ -158,10 +155,8 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           iframeDocument.body.appendChild(passwordPrompt);
 
           submitButton.addEventListener('click', () => {
-            // For demo purposes, accept any input
             iframeDocument.body.removeChild(passwordPrompt);
 
-            // Proceed to remove the overlay as before
             overlay.style.opacity = '0';
             overlay.style.backdropFilter = 'blur(0px)';
             overlay.addEventListener(
@@ -174,7 +169,6 @@ const createMutationHighlightPlugin = (): ReplayPlugin => {
           });
 
           cancelButton.addEventListener('click', () => {
-            // Remove the password prompt
             iframeDocument.body.removeChild(passwordPrompt);
           });
         });
@@ -227,253 +221,19 @@ const createScreenshotAnalysisPlugin = (
     text: string;
   }
 
-  const highlightMatchingElements = (
-    parsedText: string,
-    coordinates: Record<string, BoundingBox> | string,
-    canvasWidth: number,
-    canvasHeight: number,
-  ) => {
-    let coordinateObject: Record<string, number[]>;
-
-    if (typeof coordinates === 'string') {
-      try {
-        // Replace single quotes with double quotes and parse JSON
-        coordinateObject = JSON.parse(coordinates.replace(/'/g, '"'));
-      } catch (e) {
-        console.error('Error parsing coordinates JSON:', e);
-        return;
-      }
-    } else {
-      coordinateObject = coordinates;
-    }
-
-    console.log('Raw coordinates received:', coordinates);
-    console.log('Parsed coordinates object:', coordinateObject);
-    console.log('Canvas dimensions:', {
-      width: canvasWidth,
-      height: canvasHeight,
-    });
-
-    // Convert coordinates to actual pixel values and create boxes
-    const boxes = Object.entries(coordinateObject)
-      .map(([id, coords]): ParsedBox => {
-        // Ensure coords exists and is an array
-        if (!coords || !Array.isArray(coords) || coords.length !== 4) {
-          console.warn(`Invalid coordinates for ID ${id}:`, coords);
-          return { id, coords: { x: 0, y: 0, width: 0, height: 0 }, text: "" };
-        }
-
-        // Ensure all values are numbers
-        const coordArray = coords.map(Number);
-        if (coordArray.some(Number.isNaN)) {
-          console.warn(`Invalid coordinate values for ID ${id}:`, coords);
-          return { id, coords: { x: 0, y: 0, width: 0, height: 0 }, text: "" };
-        }
-
-        // Convert proportional coordinates to actual pixels
-        const [x, y, width, height] = coordArray;
-        const pixelCoords = {
-          x: Math.round(x * canvasWidth),
-          y: Math.round(y * canvasHeight),
-          width: Math.round(width * canvasWidth),
-          height: Math.round(height * canvasHeight),
-        };
-        console.log(`Box ${id} converted coordinates:`, pixelCoords);
-
-        // Extract text from the parsed response, accounting for the ID offset
-        const text =
-          parsedText
-            .split('\n')
-            .find((line) => line.startsWith(`Text Box ID ${id}:`))
-            ?.replace(/^Text Box ID \d+: /, '')
-            ?.trim() || '';
-
-        return { id, coords: pixelCoords, text };
-      })
-      .filter((box) => box.text !== ''); // Filter out boxes with no text
-
-    // Get all elements in the iframe
-    const elements = Array.from(document.querySelectorAll('*'));
-    console.log('Total DOM elements found:', elements.length);
-
-    // For each box from the AI response, find matching elements
-    // biome-ignore lint/complexity/noForEach: <explanation>
-    boxes.forEach((box) => {
-      if (!box.text) return;
-      console.log('\nProcessing box:', {
-        id: box.id,
-        text: box.text,
-        coords: box.coords,
-      });
-
-      let bestMatch: Element | null = null;
-      let bestScore = 0;
-      const debugMatches: Array<{
-        element: Element;
-        score: number;
-        rect: DOMRect;
-      }> = [];
-
-      // biome-ignore lint/complexity/noForEach: <explanation>
-      elements.forEach((el) => {
-        const rect = el.getBoundingClientRect();
-
-        // Skip elements with no dimensions or if they're too small
-        if (
-          rect.width === 0 ||
-          rect.height === 0 ||
-          rect.width < 5 ||
-          rect.height < 5
-        )
-          return;
-
-        // Calculate overlap
-        const overlap = intersects(rect, box.coords);
-
-        // Calculate size ratio (prefer elements closer in size)
-        const targetArea = box.coords.width * box.coords.height;
-        const elementArea = rect.width * rect.height;
-        const sizeSimilarity =
-          Math.min(targetArea, elementArea) / Math.max(targetArea, elementArea);
-
-        // Calculate position similarity based on center points
-        const targetCenterX = box.coords.x + box.coords.width / 2;
-        const targetCenterY = box.coords.y + box.coords.height / 2;
-        const elementCenterX = rect.x + rect.width / 2;
-        const elementCenterY = rect.y + rect.height / 2;
-
-        const distanceX = Math.abs(targetCenterX - elementCenterX);
-        const distanceY = Math.abs(targetCenterY - elementCenterY);
-        const maxDistance = Math.max(canvasWidth, canvasHeight);
-        const positionSimilarity = 1 - (distanceX + distanceY) / maxDistance;
-
-        // Calculate text similarity if element has text
-        const elementText = el.textContent?.toLowerCase() || '';
-        const boxText = box.text.toLowerCase();
-        let textSimilarity = 0;
-
-        if (elementText.includes(boxText)) {
-          textSimilarity = 1;
-        } else if (elementText.length > 0 && boxText.length > 0) {
-          const halfBoxText = boxText.substring(
-            0,
-            Math.floor(boxText.length / 2),
-          );
-          const halfElementText = elementText.substring(
-            0,
-            Math.floor(elementText.length / 2),
-          );
-          if (
-            elementText.includes(halfBoxText) ||
-            boxText.includes(halfElementText)
-          ) {
-            textSimilarity = 0.5;
-          }
-        }
-
-        // Combined score (weighted)
-        const score =
-          (overlap ? 0.35 : 0) +
-          sizeSimilarity * 0.25 +
-          positionSimilarity * 0.25 +
-          textSimilarity * 0.15;
-
-        if (score > 0.1) {
-          // Log all potentially relevant matches
-          debugMatches.push({
-            element: el,
-            score,
-            rect,
-          });
-        }
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = el;
-        }
-      });
-
-      console.log(
-        `Found ${debugMatches.length} potential matches for "${box.text}"`,
-      );
-      debugMatches.sort((a, b) => b.score - a.score);
-      debugMatches.slice(0, 3).forEach((match, i) => {
-        console.log(`Match ${i + 1}:`, {
-          element: match.element.tagName,
-          text: match.element.textContent?.slice(0, 50),
-          score: match.score.toFixed(3),
-          rect: match.rect,
-        });
-      });
-
-      if (bestMatch && bestScore > 0.3) {
-        console.log('Selected best match:', {
-          element: bestMatch.tagName,
-          text: bestMatch.textContent?.slice(0, 50),
-          score: bestScore.toFixed(3),
-          rect: bestMatch.getBoundingClientRect(),
-        });
-        (bestMatch as HTMLElement).classList.add('omni-highlight');
-        bestMatch.setAttribute('data-omni-text', box.text);
-      } else {
-        console.log(
-          'No good match found for',
-          box.text,
-          'best score was',
-          bestScore,
-        );
-      }
-    });
-  };
-
-  const intersects = (rect1: DOMRect, rect2: Coordinates) => {
-    return !(
-      rect1.right < rect2.x ||
-      rect1.left > rect2.x + rect2.width ||
-      rect1.bottom < rect2.y ||
-      rect1.top > rect2.y + rect2.height
-    );
-  };
+  let aiBoundingBoxes: ParsedBox[] = [];
 
   const analyzeScreenshot = async (context: ReplayerContext) => {
     if (analysisComplete) return;
 
-    const iframe = document.querySelector('iframe');
+    const iframe = context.replayer.iframe;
     if (!iframe || !iframe.contentDocument) {
       console.error('No iframe found');
       return;
     }
 
-    // Add highlight styles
-    const style = iframe.contentDocument.createElement('style');
-    style.textContent = `
-      .omni-highlight {
-        position: relative !important;
-        outline: 2px solid #4A90E2 !important;
-        background-color: rgba(255, 255, 0, 0.3) !important;
-        transition: all 0.3s ease !important;
-        z-index: 1000 !important;
-      }
-      .omni-highlight::after {
-        content: attr(data-omni-text);
-        position: absolute;
-        top: -20px;
-        left: 0;
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 12px;
-        white-space: nowrap;
-        z-index: 1001;
-      }
-    `;
-    iframe.contentDocument.head.appendChild(style);
-
     try {
       context.replayer.pause();
-      const iframe = context.replayer.iframe;
-      if (!iframe?.contentDocument) return;
 
       const canvas = await html2canvas(iframe.contentDocument.body, {
         scale: 2,
@@ -499,12 +259,70 @@ const createScreenshotAnalysisPlugin = (
         result.data[1].split('\n').filter((line) => line.trim().length > 0),
       );
 
-      void highlightMatchingElements(
-        result.data[1],
-        result.data[2],
-        canvasWidth,
-        canvasHeight,
-      );
+      // Process the coordinates and store in aiBoundingBoxes
+      const coordinates = result.data[2];
+
+      let coordinateObject: Record<string, number[]>;
+
+      if (typeof coordinates === 'string') {
+        try {
+          coordinateObject = JSON.parse(coordinates.replace(/'/g, '"'));
+        } catch (e) {
+          console.error('Error parsing coordinates JSON:', e);
+          return;
+        }
+      } else {
+        coordinateObject = coordinates;
+      }
+
+      console.log('Raw coordinates received:', coordinates);
+      console.log('Parsed coordinates object:', coordinateObject);
+      console.log('Canvas dimensions:', {
+        width: canvasWidth,
+        height: canvasHeight,
+      });
+
+      // Convert coordinates to actual pixel values and create boxes
+      aiBoundingBoxes = Object.entries(coordinateObject)
+        .map(([id, coords]): ParsedBox => {
+          if (!coords || !Array.isArray(coords) || coords.length !== 4) {
+            console.warn(`Invalid coordinates for ID ${id}:`, coords);
+            return {
+              id,
+              coords: { x: 0, y: 0, width: 0, height: 0 },
+              text: '',
+            };
+          }
+
+          const coordArray = coords.map(Number);
+          if (coordArray.some(Number.isNaN)) {
+            console.warn(`Invalid coordinate values for ID ${id}:`, coords);
+            return {
+              id,
+              coords: { x: 0, y: 0, width: 0, height: 0 },
+              text: '',
+            };
+          }
+
+          const [x, y, width, height] = coordArray;
+          const pixelCoords = {
+            x: x * canvasWidth,
+            y: y * canvasHeight,
+            width: width * canvasWidth,
+            height: height * canvasHeight,
+          };
+          console.log(`Box ${id} converted coordinates:`, pixelCoords);
+
+          const text =
+            result.data[1]
+              .split('\n')
+              .find((line) => line.startsWith(`Text Box ID ${id}:`))
+              ?.replace(/^Text Box ID \d+: /, '')
+              ?.trim() || '';
+
+          return { id, coords: pixelCoords, text };
+        })
+        .filter((box) => box.text !== ''); // Filter out boxes with no text
 
       analysisComplete = true;
     } catch (error) {
@@ -512,9 +330,88 @@ const createScreenshotAnalysisPlugin = (
     }
   };
 
+  const applyBoundingBoxStyles = (iframeDocument: Document) => {
+    if (aiBoundingBoxes.length === 0) return;
+
+    // Add highlight styles if not already added
+    if (!iframeDocument.querySelector('#omni-highlight-styles')) {
+      const style = iframeDocument.createElement('style');
+      style.id = 'omni-highlight-styles';
+      style.textContent = `
+        .omni-highlight {
+          position: relative !important;
+          outline: 2px solid #4A90E2 !important;
+          background-color: rgba(255, 255, 0, 0.3) !important;
+          transition: all 0.3s ease !important;
+          z-index: 1000 !important;
+        }
+        .omni-highlight::after {
+          content: attr(data-omni-text);
+          position: absolute;
+          top: -20px;
+          left: 0;
+          background: rgba(0, 0, 0, 0.8);
+          color: white;
+          padding: 2px 6px;
+          border-radius: 3px;
+          font-size: 12px;
+          white-space: nowrap;
+          z-index: 1001;
+        }
+      `;
+      iframeDocument.head.appendChild(style);
+    }
+
+    // For each bounding box
+    aiBoundingBoxes.forEach((box) => {
+      const elements = Array.from(iframeDocument.querySelectorAll('*'));
+
+      elements.forEach((el) => {
+        const rect = el.getBoundingClientRect();
+
+        if (
+          rect.width === 0 ||
+          rect.height === 0 ||
+          rect.width < 5 ||
+          rect.height < 5
+        )
+          return;
+
+        if (intersects(rect, box.coords)) {
+          (el as HTMLElement).classList.add('omni-highlight');
+          el.setAttribute('data-omni-text', box.text);
+        }
+      });
+    });
+  };
+
+  const intersects = (rect1: DOMRect, rect2: Coordinates) => {
+    return !(
+      rect1.right < rect2.x ||
+      rect1.left > rect2.x + rect2.width ||
+      rect1.bottom < rect2.y ||
+      rect1.top > rect2.y + rect2.height
+    );
+  };
+
   return {
     handler(event: eventWithTime, isSync: boolean, context: ReplayerContext) {
-      if (event.type === EventType.FullSnapshot) {
+      const iframeDocument = context.replayer.iframe.contentDocument;
+      if (!iframeDocument) return;
+
+      if (
+        event.type === EventType.FullSnapshot ||
+        (event.type === EventType.IncrementalSnapshot &&
+          event.data.source === IncrementalSource.Mutation)
+      ) {
+        if (event.type === EventType.FullSnapshot) {
+          setTimeout(() => applyBoundingBoxStyles(iframeDocument), 100);
+        } else {
+          applyBoundingBoxStyles(iframeDocument);
+        }
+      }
+
+      if (event.type === EventType.FullSnapshot && !analysisComplete) {
         void analyzeScreenshot(context);
       }
     },
@@ -576,7 +473,7 @@ export default function InteractivePlayer() {
           if (iframe) {
             iframe.style.pointerEvents = 'auto';
             iframe.style.userSelect = 'auto';
-            iframe.removeAttribute('sandbox'); // Remove sandbox to avoid the warning
+            iframe.removeAttribute('sandbox');
 
             try {
               const doc =
@@ -606,7 +503,6 @@ export default function InteractivePlayer() {
           if (iframe) {
             iframe.style.pointerEvents = '';
             iframe.style.userSelect = '';
-            // Restore the sandbox attribute
             iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
 
             try {
