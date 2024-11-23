@@ -1,118 +1,141 @@
 import { Client } from '@gradio/client';
-import { EventType, IncrementalSource, type eventWithTime, type fullSnapshotEvent, type incrementalSnapshotEvent } from '@rrweb/types';
+import { EventType, IncrementalSource } from '@rrweb/types';
+import type { eventWithTime } from '@rrweb/types';
 import html2canvas from 'html2canvas';
-import { Replayer } from 'rrweb';
-import { type Mirror, NodeType, createMirror } from 'rrweb-snapshot';
 import { v4 as uuidv4 } from 'uuid';
-import type { ProcessedSession, SemanticLabel } from './types';
+import type { AILabel, ProcessedSession, SemanticLabel } from './types';
+
+type BoundingBox = [number, number, number, number]; // [x, y, width, height]
+
+interface GradioResponse {
+  data: [
+    {
+      // image output
+      path: string;
+      url: string;
+      size: null;
+      orig_name: string;
+      mime_type: null;
+      is_stream: boolean;
+      meta: { _type: string };
+    },
+    string, // parsed text
+    Record<string, BoundingBox>, // coordinates
+  ];
+}
 
 export class SemanticProcessor {
-  private mirror: Mirror;
-  private virtualDom: Document;
-  private client: Promise<any>;
-  private tempContainer: HTMLElement;
-  
+  private tempContainer: HTMLDivElement | null = null;
+  private client: Client | null = null;
+
   constructor() {
-    this.mirror = createMirror();
-    this.virtualDom = document.implementation.createHTMLDocument();
-    this.client = Client.connect('microsoft/OmniParser');
-    
-    // Create a temporary container in the actual document
+    this.setupTempContainer();
+  }
+
+  private setupTempContainer() {
+    // Create a temporary container for html2canvas
     this.tempContainer = document.createElement('div');
     this.tempContainer.style.position = 'absolute';
     this.tempContainer.style.left = '-9999px';
-    this.tempContainer.style.width = '1024px';  // Fixed width for consistent rendering
-    this.tempContainer.style.height = '768px';  // Fixed height for consistent rendering
+    this.tempContainer.style.width = '1024px';
+    this.tempContainer.style.height = '768px';
     document.body.appendChild(this.tempContainer);
   }
 
-  async processSession(events: eventWithTime[]): Promise<ProcessedSession> {
-    const sessionId = uuidv4();
-    const semanticMapping: SemanticLabel[] = [];
-    
-    try {
-      // Step 1: Get the initial full snapshot
-      const firstFullSnapshot = events.find(
-        (e) => e.type === EventType.FullSnapshot
-      ) as fullSnapshotEvent;
-      
-      if (!firstFullSnapshot) {
-        throw new Error('No full snapshot found in session');
-      }
-
-      // Step 2: Create a temporary replayer to rebuild the DOM
-      const replayer = new Replayer(events, {
-        root: this.tempContainer,
-        skipInactive: true,
-        showWarning: false,
-      });
-
-      // Step 3: Process the initial snapshot for semantic labels
-      const initialLabels = await this.processSnapshot(this.tempContainer, firstFullSnapshot.timestamp);
-      semanticMapping.push(...initialLabels);
-
-      // Step 4: Process incremental snapshots
-      for (const event of events) {
-        if (
-          event.type === EventType.IncrementalSnapshot &&
-          event.data.source === IncrementalSource.Mutation
-        ) {
-          const newLabels = await this.processIncrementalSnapshot(event);
-          semanticMapping.push(...newLabels);
-        }
-      }
-
-      replayer.destroy();
-
-      return {
-        id: sessionId,
-        originalEvents: events,
-        semanticMapping,
-      };
-    } finally {
-      // Clean up
-      this.tempContainer.innerHTML = '';
+  private async initClient() {
+    if (!this.client) {
+      const  client = await Client.connect("microsoft/OmniParser");
+      this.client = client;
     }
+    return this.client;
   }
 
-  private async processSnapshot(
-    element: HTMLElement,
-    timestamp: number
-  ): Promise<SemanticLabel[]> {
+  public async processSession(events: eventWithTime[]): Promise<ProcessedSession> {
+    const semanticMapping: SemanticLabel[] = [];
+    let lastFullSnapshot: eventWithTime | null = null;
+
+    for (const event of events) {
+      if (event.type === EventType.FullSnapshot) {
+        lastFullSnapshot = event;
+        const labels = await this.processSnapshot(event);
+        semanticMapping.push(...labels);
+      } else if (
+        event.type === EventType.IncrementalSnapshot &&
+        event.data.source === IncrementalSource.Mutation &&
+        lastFullSnapshot
+      ) {
+        const labels = await this.processIncrementalSnapshot(event, lastFullSnapshot);
+        semanticMapping.push(...labels);
+      }
+    }
+
+    return {
+      semanticMapping,
+      processedAt: new Date().toISOString(),
+    };
+  }
+
+  private async processSnapshot(event: eventWithTime): Promise<SemanticLabel[]> {
+    if (!this.tempContainer) {
+      throw new Error('Temp container not initialized');
+    }
+
+    // Clear previous content
+    this.tempContainer.innerHTML = '';
+
+    // Create a new iframe
+    const iframe = document.createElement('iframe');
+    iframe.style.width = '1024px';
+    iframe.style.height = '768px';
+    this.tempContainer.appendChild(iframe);
+
+    if (!iframe.contentDocument) {
+      throw new Error('Failed to create iframe document');
+    }
+
+    // Rebuild DOM in iframe
+    iframe.contentDocument.documentElement.innerHTML = event.data.node.toString();
+
     try {
-      const canvas = await html2canvas(element, {
-        logging: false,
+      const canvas = await html2canvas(iframe.contentDocument.body, {
+        scale: 2,
         useCORS: true,
-        scale: 1,
-        width: 1024,  // Match container size
-        height: 768,  // Match container size
-        backgroundColor: '#ffffff',
+        logging: false,
       });
+
+      const canvasWidth = canvas.width / 2;
+      const canvasHeight = canvas.height / 2;
 
       const blob = await new Promise<Blob>((resolve) => {
         canvas.toBlob((blob) => resolve(blob!), 'image/webp', 0.95);
       });
 
-      const client = await this.client;
-      const result = await client.predict('/process', {
+      const client = await this.initClient();
+      const result = (await client.predict('/process', {
         image_input: blob,
         box_threshold: 0.05,
         iou_threshold: 0.1,
-      });
+      })) as GradioResponse;
 
       const coordinates = result.data[2];
-      const textResults = result.data[1].split('\n').filter((line: string) => line.trim().length > 0);
+      const parsedText = result.data[1].split('\n').filter((line) => line.trim().length > 0);
 
       let coordinateObject: Record<string, number[]>;
 
       if (typeof coordinates === 'string') {
-        coordinateObject = JSON.parse(coordinates.replace(/'/g, '"'));
+        try {
+          coordinateObject = JSON.parse(coordinates.replace(/'/g, '"'));
+        } catch (e) {
+          console.error('Error parsing coordinates JSON:', e);
+          return [];
+        }
       } else {
         coordinateObject = coordinates;
       }
 
-      return Object.entries(coordinateObject)
-        .map(([id, coords]): SemanticLabel | null => {
+      // Convert coordinates to actual pixel values and create semantic labels
+      const aiLabels: AILabel[] = Object.entries(coordinateObject)
+        .map(([id, coords]): AILabel | null => {
           if (!coords || !Array.isArray(coords) || coords.length !== 4) {
             console.warn(`Invalid coordinates for ID ${id}:`, coords);
             return null;
@@ -125,44 +148,52 @@ export class SemanticProcessor {
           }
 
           const [x, y, width, height] = coordArray;
-          const text = textResults
-            .find((line) => line.startsWith(`Text Box ID ${id}:`))
-            ?.replace(/^Text Box ID \d+: /, '')
-            ?.trim();
-
-          if (!text) return null;
-
           return {
-            elementId: id,
-            timestamp,
+            id: uuidv4(),
+            text: parsedText[Number.parseInt(id)] || '',
             boundingBox: {
-              x,
-              y,
-              width,
-              height
+              x: (x * canvasWidth) / 100,
+              y: (y * canvasHeight) / 100,
+              width: (width * canvasWidth) / 100,
+              height: (height * canvasHeight) / 100,
             },
-            label: text,
-            confidence: 0.95 // Default confidence for OmniParser
+            confidence: 1.0,
+            timestamp: event.timestamp,
           };
         })
-        .filter((label): label is SemanticLabel => label !== null);
+        .filter((label): label is AILabel => label !== null);
+
+      return aiLabels.map((aiLabel) => ({
+        id: aiLabel.id,
+        text: aiLabel.text,
+        boundingBox: aiLabel.boundingBox,
+        confidence: aiLabel.confidence,
+        timestamp: aiLabel.timestamp,
+        type: 'text',
+      }));
     } catch (error) {
-      console.error('Failed to process snapshot:', error);
+      console.error('Error processing snapshot:', error);
       return [];
+    } finally {
+      // Clean up
+      iframe.remove();
     }
   }
 
   private async processIncrementalSnapshot(
-    event: incrementalSnapshotEvent
+    event: eventWithTime,
+    lastFullSnapshot: eventWithTime
   ): Promise<SemanticLabel[]> {
-    // For now, just return empty array for incremental snapshots
-    return [];
+    // For now, we'll reprocess the full snapshot when we get a mutation
+    // In the future, we can optimize this to only process the changed areas
+    return this.processSnapshot(lastFullSnapshot);
   }
 
-  destroy() {
-    // Clean up
-    if (this.tempContainer?.parentNode) {
-      this.tempContainer.parentNode.removeChild(this.tempContainer);
+  public destroy() {
+    if (this.tempContainer) {
+      this.tempContainer.remove();
+      this.tempContainer = null;
     }
+    this.client = null;
   }
 }

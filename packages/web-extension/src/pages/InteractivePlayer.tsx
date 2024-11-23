@@ -19,6 +19,7 @@ import 'rrweb-player/dist/style.css';
 import html2canvas from 'html2canvas';
 import type { ReplayPlugin, eventWithTime } from 'rrweb';
 import type { Mirror } from 'rrweb-snapshot';
+import { enhanceEventsWithSemanticLabels } from './semantic/enhance-events';
 
 type BoundingBox = [number, number, number, number]; // [x, y, width, height]
 
@@ -453,6 +454,10 @@ export default function InteractivePlayer() {
         }, {});
         const sampleEvents = Object.values(eventsByType).flat().slice(0, 6);
         setDebugEvents(sampleEvents);
+
+        enhanceEventsWithSemanticLabels(events).catch(
+          console.error,
+        )
 
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
