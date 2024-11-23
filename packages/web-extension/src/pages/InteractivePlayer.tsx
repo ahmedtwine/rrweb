@@ -3,8 +3,10 @@ import {
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
+  Button,
   Center,
   Code,
+  Image,
   Text,
   VStack,
   useToast,
@@ -19,7 +21,7 @@ import 'rrweb-player/dist/style.css';
 import html2canvas from 'html2canvas';
 import type { ReplayPlugin, eventWithTime } from 'rrweb';
 import type { Mirror } from 'rrweb-snapshot';
-import { enhanceEventsWithSemanticLabels } from './semantic/enhance-events';
+import { DOMReconstructor } from './semantic/processor';
 
 type BoundingBox = [number, number, number, number]; // [x, y, width, height]
 
@@ -421,11 +423,58 @@ const createScreenshotAnalysisPlugin = (
 export default function InteractivePlayer() {
   const playerElRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
+  const reconstructedImageRef = useRef<string | null>(null);
   const { sessionId } = useParams();
   const [sessionName, setSessionName] = useState('');
   const [parseResults, setParseResults] = useState<string[]>([]);
   const [debugEvents, setDebugEvents] = useState<eventWithTime[]>([]);
+  const [reconstructedImage, setReconstructedImage] = useState<string | null>(null);
   const toast = useToast();
+
+  const captureReconstructedDOM = async () => {
+    const replayerInstance = playerRef.current?.getReplayer();
+    if (!replayerInstance?.iframe) {
+      toast({
+        title: "Error",
+        description: "Replay iframe not found",
+        status: "error",
+        duration: 3000,
+      });
+      return;
+    }
+
+    try {
+      const reconstructor = new DOMReconstructor();
+      const events = replayerInstance.service.state.context.events;
+      const result = await reconstructor.reconstructFromEvents(events);
+      
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      if (!result.imageDataUrl) {
+        throw new Error('No image data generated');
+      }
+      
+      setReconstructedImage(result.imageDataUrl);
+      toast({
+        title: "Success",
+        description: "DOM reconstruction captured",
+        status: "success",
+        duration: 3000,
+      });
+      
+      reconstructor.destroy();
+    } catch (error) {
+      console.error('Failed to capture DOM:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to capture DOM reconstruction",
+        status: "error",
+        duration: 3000,
+      });
+    }
+  };
 
   useEffect(() => {
     if (!sessionId) return;
@@ -454,10 +503,6 @@ export default function InteractivePlayer() {
         }, {});
         const sampleEvents = Object.values(eventsByType).flat().slice(0, 6);
         setDebugEvents(sampleEvents);
-
-        enhanceEventsWithSemanticLabels(events).catch(
-          console.error,
-        )
 
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
@@ -540,6 +585,18 @@ export default function InteractivePlayer() {
             }
           }
         });
+
+        // Initialize DOM reconstructor for debugging
+        const domContainer = document.createElement('div');
+        domContainer.id = 'dom-reconstructor-container';
+        document.body.appendChild(domContainer);
+        
+        const domReconstructor = new DOMReconstructor(domContainer);
+        const reconstructedIframe = domReconstructor.reconstructFromEvents(events);
+        
+        if (!reconstructedIframe) {
+          console.error('Failed to reconstruct DOM');
+        }
       })
       .catch((err) => {
         console.error(err);
@@ -586,6 +643,29 @@ export default function InteractivePlayer() {
           </Code>
         </Box>
       )}
+
+      <Box p={4}>
+        <Button 
+          colorScheme="blue" 
+          onClick={captureReconstructedDOM}
+          mb={4}
+        >
+          Capture Reconstructed DOM
+        </Button>
+        
+        {reconstructedImage && (
+          <Box mt={4}>
+            <Text mb={2}>Reconstructed DOM Preview:</Text>
+            <Image 
+              src={reconstructedImage} 
+              alt="Reconstructed DOM" 
+              maxW="100%" 
+              border="1px solid" 
+              borderColor="gray.200" 
+            />
+          </Box>
+        )}
+      </Box>
     </VStack>
   );
 }
