@@ -423,6 +423,7 @@ export default function InteractivePlayer() {
   const { sessionId } = useParams();
   const [sessionName, setSessionName] = useState('');
   const [parseResults, setParseResults] = useState<string[]>([]);
+  const [debugEvents, setDebugEvents] = useState<eventWithTime[]>([]);
   const toast = useToast();
 
   useEffect(() => {
@@ -442,6 +443,17 @@ export default function InteractivePlayer() {
 
         playerRef.current?.$destroy();
 
+        // Store a small sample of events for debugging
+        // Take first 2 events from each event type for a representative sample
+        const eventsByType = events.reduce((acc: Record<string, eventWithTime[]>, event: eventWithTime) => {
+          const type = event.type.toString();
+          if (!acc[type]) acc[type] = [];
+          if (acc[type].length < 2) acc[type].push(event);
+          return acc;
+        }, {});
+        const sampleEvents = Object.values(eventsByType).flat().slice(0, 6);
+        setDebugEvents(sampleEvents);
+
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
           props: {
@@ -450,9 +462,9 @@ export default function InteractivePlayer() {
             UNSAFE_replayCanvas: true,
             useVirtualDom: true,
             plugins: [
-              // createClickHighlightPlugin(),
-              // createMutationHighlightPlugin(),
-              createScreenshotAnalysisPlugin(setParseResults),
+              createClickHighlightPlugin(),
+              createMutationHighlightPlugin(),
+              // createScreenshotAnalysisPlugin(setParseResults),
             ],
           },
         });
@@ -555,6 +567,17 @@ export default function InteractivePlayer() {
           </Text>
           <Code display="block" whiteSpace="pre" p={4}>
             {parseResults.join('\n')}
+          </Code>
+        </Box>
+      )}
+
+      {debugEvents.length > 0 && (
+        <Box p={4} borderRadius="md" bg="gray.50">
+          <Text fontSize="lg" fontWeight="bold" mb={3}>
+            Debug Events Sample:
+          </Text>
+          <Code display="block" whiteSpace="pre" p={4} maxHeight="300px" overflowY="auto">
+            {JSON.stringify(debugEvents, null, 2)}
           </Code>
         </Box>
       )}
