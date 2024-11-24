@@ -6,6 +6,7 @@ import {
   Button,
   Center,
   Code,
+  Heading,
   Image,
   Text,
   VStack,
@@ -365,9 +366,11 @@ const createScreenshotAnalysisPlugin = (
     }
 
     // For each bounding box
-    aiBoundingBoxes.forEach((box) => {
+    // biome-ignore lint/complexity/noForEach: <explanation>
+        aiBoundingBoxes.forEach((box) => {
       const elements = Array.from(iframeDocument.querySelectorAll('*'));
 
+      // biome-ignore lint/complexity/noForEach: <explanation>
       elements.forEach((el) => {
         const rect = el.getBoundingClientRect();
 
@@ -429,52 +432,9 @@ export default function InteractivePlayer() {
   const [parseResults, setParseResults] = useState<string[]>([]);
   const [debugEvents, setDebugEvents] = useState<eventWithTime[]>([]);
   const [reconstructedImage, setReconstructedImage] = useState<string | null>(null);
+  const [semanticLabels, setSemanticLabels] = useState<SemanticLabel[]>([]);
+  const [debugImage, setDebugImage] = useState<string | null>(null);
   const toast = useToast();
-
-  const captureReconstructedDOM = async () => {
-    const replayerInstance = playerRef.current?.getReplayer();
-    if (!replayerInstance?.iframe) {
-      toast({
-        title: "Error",
-        description: "Replay iframe not found",
-        status: "error",
-        duration: 3000,
-      });
-      return;
-    }
-
-    try {
-      const reconstructor = new DOMReconstructor();
-      const events = replayerInstance.service.state.context.events;
-      const result = await reconstructor.reconstructFromEvents(events);
-      
-      if (result.error) {
-        throw new Error(result.error);
-      }
-      
-      if (!result.imageDataUrl) {
-        throw new Error('No image data generated');
-      }
-      
-      setReconstructedImage(result.imageDataUrl);
-      toast({
-        title: "Success",
-        description: "DOM reconstruction captured",
-        status: "success",
-        duration: 3000,
-      });
-      
-      reconstructor.destroy();
-    } catch (error) {
-      console.error('Failed to capture DOM:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to capture DOM reconstruction",
-        status: "error",
-        duration: 3000,
-      });
-    }
-  };
 
   useEffect(() => {
     if (!sessionId) return;
@@ -586,17 +546,22 @@ export default function InteractivePlayer() {
           }
         });
 
-        // Initialize DOM reconstructor for debugging
-        const domContainer = document.createElement('div');
-        domContainer.id = 'dom-reconstructor-container';
-        document.body.appendChild(domContainer);
-        
-        const domReconstructor = new DOMReconstructor(domContainer);
-        const reconstructedIframe = domReconstructor.reconstructFromEvents(events);
-        
-        if (!reconstructedIframe) {
-          console.error('Failed to reconstruct DOM');
-        }
+        // Initialize semantic processor
+        const processor = new DOMReconstructor();
+        processor.reconstructFromEvents(events).then(() => {
+          console.log('DOM reconstruction complete');
+        });
+
+        // Subscribe to semantic label updates
+        const unsubscribe = processor.subscribeToSemanticLabels((labels, imageData) => {
+          console.log('Received semantic labels:', labels);
+          setSemanticLabels(labels);
+          setDebugImage(imageData);
+        });
+
+        return () => {
+          unsubscribe?.();
+        };
       })
       .catch((err) => {
         console.error(err);
@@ -622,50 +587,28 @@ export default function InteractivePlayer() {
         <Box ref={playerElRef}></Box>
       </Center>
 
-      {parseResults.length > 0 && (
-        <Box p={4} borderRadius="md" bg="gray.50">
-          <Text fontSize="lg" fontWeight="bold" mb={3}>
-            Parsed Elements:
-          </Text>
-          <Code display="block" whiteSpace="pre" p={4}>
-            {parseResults.join('\n')}
-          </Code>
+      {(semanticLabels.length > 0 || debugImage) && (
+        <Box mt={4} p={4} borderWidth={1} borderRadius="md">
+          <Heading size="sm" mb={2}>Semantic Analysis Debug</Heading>
+          {debugImage && (
+            <Box mb={4}>
+              <Text mb={2} fontWeight="bold">Analyzed Image:</Text>
+              <Image src={debugImage} maxH="300px" objectFit="contain" />
+            </Box>
+          )}
+          {semanticLabels.map((label, index) => (
+            <Box key={label.id} mb={2} p={2} bg="gray.50" borderRadius="sm">
+              <Text><strong>Label {index + 1}:</strong> {label.label}</Text>
+              <Text fontSize="sm" color="gray.600">
+                Confidence: {(label.confidence * 100).toFixed(1)}%
+              </Text>
+              <Text fontSize="sm" color="gray.600">
+                Position: x={label.bbox.x}, y={label.bbox.y}, w={label.bbox.width}, h={label.bbox.height}
+              </Text>
+            </Box>
+          ))}
         </Box>
       )}
-
-      {debugEvents.length > 0 && (
-        <Box p={4} borderRadius="md" bg="gray.50">
-          <Text fontSize="lg" fontWeight="bold" mb={3}>
-            Debug Events Sample:
-          </Text>
-          <Code display="block" whiteSpace="pre" p={4} maxHeight="300px" overflowY="auto">
-            {JSON.stringify(debugEvents, null, 2)}
-          </Code>
-        </Box>
-      )}
-
-      <Box p={4}>
-        <Button 
-          colorScheme="blue" 
-          onClick={captureReconstructedDOM}
-          mb={4}
-        >
-          Capture Reconstructed DOM
-        </Button>
-        
-        {reconstructedImage && (
-          <Box mt={4}>
-            <Text mb={2}>Reconstructed DOM Preview:</Text>
-            <Image 
-              src={reconstructedImage} 
-              alt="Reconstructed DOM" 
-              maxW="100%" 
-              border="1px solid" 
-              borderColor="gray.200" 
-            />
-          </Box>
-        )}
-      </Box>
     </VStack>
   );
 }
