@@ -3,11 +3,8 @@ import {
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
-  Button,
   Center,
   Code,
-  Heading,
-  Image,
   Text,
   VStack,
   useToast,
@@ -22,7 +19,6 @@ import 'rrweb-player/dist/style.css';
 import html2canvas from 'html2canvas';
 import type { ReplayPlugin, eventWithTime } from 'rrweb';
 import type { Mirror } from 'rrweb-snapshot';
-import { DOMReconstructor } from './semantic/processor';
 
 type BoundingBox = [number, number, number, number]; // [x, y, width, height]
 
@@ -237,7 +233,7 @@ const createScreenshotAnalysisPlugin = (
     }
 
     try {
-      context.replayer.pause();
+      // context.replayer.pause();
 
       const canvas = await html2canvas(iframe.contentDocument.body, {
         scale: 2,
@@ -255,8 +251,8 @@ const createScreenshotAnalysisPlugin = (
       const client = await Client.connect('microsoft/OmniParser');
       const result = (await client.predict('/process', {
         image_input: blob,
-        box_threshold: 0.05,
-        iou_threshold: 0.1,
+        box_threshold: 0.9,
+        iou_threshold: 0.9,
       })) as GradioResponse;
 
       onParseResults(
@@ -426,14 +422,9 @@ const createScreenshotAnalysisPlugin = (
 export default function InteractivePlayer() {
   const playerElRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
-  const reconstructedImageRef = useRef<string | null>(null);
   const { sessionId } = useParams();
   const [sessionName, setSessionName] = useState('');
   const [parseResults, setParseResults] = useState<string[]>([]);
-  const [debugEvents, setDebugEvents] = useState<eventWithTime[]>([]);
-  const [reconstructedImage, setReconstructedImage] = useState<string | null>(null);
-  const [semanticLabels, setSemanticLabels] = useState<SemanticLabel[]>([]);
-  const [debugImage, setDebugImage] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -453,17 +444,6 @@ export default function InteractivePlayer() {
 
         playerRef.current?.$destroy();
 
-        // Store a small sample of events for debugging
-        // Take first 2 events from each event type for a representative sample
-        const eventsByType = events.reduce((acc: Record<string, eventWithTime[]>, event: eventWithTime) => {
-          const type = event.type.toString();
-          if (!acc[type]) acc[type] = [];
-          if (acc[type].length < 2) acc[type].push(event);
-          return acc;
-        }, {});
-        const sampleEvents = Object.values(eventsByType).flat().slice(0, 6);
-        setDebugEvents(sampleEvents);
-
         playerRef.current = new Replayer({
           target: playerElRef.current as HTMLElement,
           props: {
@@ -472,9 +452,9 @@ export default function InteractivePlayer() {
             UNSAFE_replayCanvas: true,
             useVirtualDom: true,
             plugins: [
-              createClickHighlightPlugin(),
-              createMutationHighlightPlugin(),
-              // createScreenshotAnalysisPlugin(setParseResults),
+              // createClickHighlightPlugin(),
+              // createMutationHighlightPlugin(),
+              createScreenshotAnalysisPlugin(setParseResults),
             ],
           },
         });
@@ -531,8 +511,10 @@ export default function InteractivePlayer() {
                 iframe.contentDocument || iframe.contentWindow?.document;
               if (doc) {
                 const styles = doc.querySelectorAll('style');
+                // biome-ignore lint/complexity/noForEach: <explanation>
                 styles.forEach((style) => {
                   if (
+                    // biome-ignore lint/complexity/useOptionalChain: <explanation>
                     style.textContent &&
                     style.textContent.includes('pointer-events: auto')
                   ) {
@@ -545,23 +527,6 @@ export default function InteractivePlayer() {
             }
           }
         });
-
-        // Initialize semantic processor
-        const processor = new DOMReconstructor();
-        processor.reconstructFromEvents(events).then(() => {
-          console.log('DOM reconstruction complete');
-        });
-
-        // Subscribe to semantic label updates
-        const unsubscribe = processor.subscribeToSemanticLabels((labels, imageData) => {
-          console.log('Received semantic labels:', labels);
-          setSemanticLabels(labels);
-          setDebugImage(imageData);
-        });
-
-        return () => {
-          unsubscribe?.();
-        };
       })
       .catch((err) => {
         console.error(err);
@@ -587,26 +552,14 @@ export default function InteractivePlayer() {
         <Box ref={playerElRef}></Box>
       </Center>
 
-      {(semanticLabels.length > 0 || debugImage) && (
-        <Box mt={4} p={4} borderWidth={1} borderRadius="md">
-          <Heading size="sm" mb={2}>Semantic Analysis Debug</Heading>
-          {debugImage && (
-            <Box mb={4}>
-              <Text mb={2} fontWeight="bold">Analyzed Image:</Text>
-              <Image src={debugImage} maxH="300px" objectFit="contain" />
-            </Box>
-          )}
-          {semanticLabels.map((label, index) => (
-            <Box key={label.id} mb={2} p={2} bg="gray.50" borderRadius="sm">
-              <Text><strong>Label {index + 1}:</strong> {label.label}</Text>
-              <Text fontSize="sm" color="gray.600">
-                Confidence: {(label.confidence * 100).toFixed(1)}%
-              </Text>
-              <Text fontSize="sm" color="gray.600">
-                Position: x={label.bbox.x}, y={label.bbox.y}, w={label.bbox.width}, h={label.bbox.height}
-              </Text>
-            </Box>
-          ))}
+      {parseResults.length > 0 && (
+        <Box p={4} borderRadius="md" bg="gray.50">
+          <Text fontSize="lg" fontWeight="bold" mb={3}>
+            Parsed Elements:
+          </Text>
+          <Code display="block" whiteSpace="pre" p={4}>
+            {parseResults.join('\n')}
+          </Code>
         </Box>
       )}
     </VStack>
